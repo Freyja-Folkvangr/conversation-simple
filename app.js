@@ -18,7 +18,8 @@
 
 var express = require('express'); // app server
 var bodyParser = require('body-parser'); // parser for post requests
-var Conversation = require('watson-developer-cloud/conversation/v1'); // watson sdk
+var Conversation = require('watson-developer-cloud/conversation/v1'); // conversation sdk
+var Discovery = require('watson-developer-cloud/discovery/v1'); // discovery sdk
 
 var app = express();
 
@@ -36,6 +37,19 @@ var conversation = new Conversation({
   version_date: '2016-10-21',
   version: 'v1'
 });
+
+// Create the service wrapper for Discovery
+var discovery = new DiscoveryV1 ({
+  // If unspecified here, the DISCOVERY_USERNAME and
+  // DISCOVERY_PASSWORD env properties will be checked
+  // After that, the SDK will fall back to the bluemix-provided VCAP_SERVICES environment property
+  // username: '<username>',
+  // password: '<password>',
+  version_date: DiscoveryV1.VERSION_DATE_2016_12_15,
+  version: 'v1'
+
+});
+
 
 // Endpoint to be call from the client side
 app.post('/api/message', function(req, res) {
@@ -58,40 +72,75 @@ app.post('/api/message', function(req, res) {
     if (err) {
       return res.status(err.code || 500).json(err);
     }
-    return res.json(updateMessage(payload, data));
+    if (data.context.call_discovery) { // Revisamos si debemos invocar Discovery
+      console.log("data.context.call_discovery == true");
+      delete data.context.call_discovery; // Eliminamos la variable de contexto call_discovery para que las proximas llamadas no siempre invoquen Discovery
+
+      // Invocamos Discovery porque existe la variable call_discovery
+      discovery.query({
+        environment_id: process.env.ENVIRONMENT_ID, // ID del ambiente de Discovery (variable de ambiente)
+        collection_id: process.env.COLLECTION_ID, // ID de la coleccion de documentos (variable de ambiente)
+        query: data.input.text, // Le pasamos a Discovery lo que escribió el usuario originalmente
+        count: 5 // retornar maximo 5 documentos
+      }, function (err, searchResponse) {
+        data.output.text = []; // Borramos la respuesta original de Conversation, más adelante en la respuesta colocamos los documentos que retorna la consulta en Discovery
+
+        if (err) { // Si hubo algun error invocando el servicio de discovery le avisamos al usuario
+          console.error(err);
+          console.log('Discovery error searching for documents: ' + err);
+          data.output.text.push("Ocurrió un error inesperado en el servicio de Discovery.<br>Por favor, intenta nuevamente.");
+        }
+        else { // Si no hubo error, revisamos los resultados que retornó discovery
+          var docs = searchResponse.results;
+
+          if (docs.length > 0) { // Si encontró documentos, entonces le retornamos los documentos como respuesta al usuario
+            console.log("Se encontraron ", docs.length, " documentos para el query de discovery");
+            var responseText = "Excelente pregunta. Encontré algunas ideas para ti:<br>";
+            
+            for (var i = 0; i < docs.length; i++) { // Le aplicamos estilo a las respuestas
+              responseText += "<div class='docContainer'>"+
+                "<div title='Ver contenido' class='docBody'>"+
+                    "<div class='docBodyTitle'>"+
+                      docs[i].extracted_metadata.title +
+                    "</div>"+
+                    "<div class='docBodySnippet'>"+
+                      docs[i].text +
+                    "</div>"+
+                  "</div>"+
+                  "<div class='modal' hidden>"+
+                  "<div class='modal-header'>"+
+                    "<div class='modal-doc'>"+
+                      docs[i].extracted_metadata.title +
+                    "</div>"+
+                    "<span class='modal-close'>"+
+                      "<img src='img/close-button.png' class='close-button'>"+
+                    "</span>"+
+                  "</div>"+
+                  "<div class='bodyText'>"+
+                    docs[i].text +
+                  "</div>"+
+                "</div>"+
+              "</div>";
+            }
+            responseText = responseText.replace(/\n/g, "<br>"); //Reemplazamos los \n con <br> para que las respuestas tengan un formato legible en los navegadores
+            
+            data.output.text.push(responseText); // Colocamos los documentos como respuesta final al usuario
+          }
+          else { // Si no encontró ningún documento le avisamos al usuario
+            console.log("se encontraron 0 documentos en Discovery.");
+            data.output.text.push("Lo siento, no encontré nada para ayudarte con ese problema.");
+          }
+        }
+
+        return res.json(data); // Le retornamos la respuesta con documentos al usuario
+      });
+    }
+    else { // Si no se debe invocar discovery ni ningún otro servicio, retornamos la respuesta normal de conversation
+      return res.json(data);
+    }
+    
   });
 });
 
-/**
- * Updates the response text using the intent confidence
- * @param  {Object} input The request to the Conversation service
- * @param  {Object} response The response from the Conversation service
- * @return {Object}          The response with the updated message
- */
-function updateMessage(input, response) {
-  var responseText = null;
-  if (!response.output) {
-    response.output = {};
-  } else {
-    return response;
-  }
-  if (response.intents && response.intents[0]) {
-    var intent = response.intents[0];
-    // Depending on the confidence of the response the app can return different messages.
-    // The confidence will vary depending on how well the system is trained. The service will always try to assign
-    // a class/intent to the input. If the confidence is low, then it suggests the service is unsure of the
-    // user's intent . In these cases it is usually best to return a disambiguation message
-    // ('I did not understand your intent, please rephrase your question', etc..)
-    if (intent.confidence >= 0.75) {
-      responseText = 'I understood your intent was ' + intent.intent;
-    } else if (intent.confidence >= 0.5) {
-      responseText = 'I think your intent was ' + intent.intent;
-    } else {
-      responseText = 'I did not understand your intent';
-    }
-  }
-  response.output.text = responseText;
-  return response;
-}
 
 module.exports = app;
