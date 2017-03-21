@@ -19,7 +19,7 @@
 var express = require('express'); // app server
 var bodyParser = require('body-parser'); // parser for post requests
 var Conversation = require('watson-developer-cloud/conversation/v1'); // conversation sdk
-var Discovery = require('watson-developer-cloud/discovery/v1'); // discovery sdk
+var DiscoveryV1 = require('watson-developer-cloud/discovery/v1'); // discovery sdk
 
 var app = express();
 
